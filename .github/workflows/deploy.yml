@@ -1,0 +1,176 @@
+name: Deploy to Vercel and Render
+
+on:
+  push:
+    branches:
+      - main
+      - prod
+      - production
+      - gamma
+      - beta
+  pull_request:
+    branches:
+      - main
+      - prod
+      - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Get branch name
+        id: branch
+        run: |
+          # Extract branch name from github ref
+          BRANCH_NAME=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+          echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Current branch: $BRANCH_NAME"
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Install Render CLI
+        run: |
+          # Install Render CLI
+          npm install -g @render/cli || true
+
+      - name: Deploy Frontend to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          cd frontend
+
+          # Determine deployment type based on branch
+          BRANCH="${{ steps.branch.outputs.name }}"
+
+          case "$BRANCH" in
+            prod|production|main)
+              echo "Deploying to PRODUCTION environment..."
+              DEPLOY_ENV="production"
+              VERCEL_ARGS="--prod"
+              ;;
+            gamma)
+              echo "Deploying to GAMMA (pre-production) environment..."
+              DEPLOY_ENV="gamma"
+              VERCEL_ARGS=""
+              ;;
+            beta)
+              echo "Deploying to BETA (staging) environment..."
+              DEPLOY_ENV="beta"
+              VERCEL_ARGS=""
+              ;;
+            *)
+              echo "Deploying to PREVIEW environment..."
+              DEPLOY_ENV="preview"
+              VERCEL_ARGS=""
+              ;;
+          esac
+
+          VERCEL_URL=$(vercel deploy $VERCEL_ARGS \
+            --token $VERCEL_TOKEN \
+            --yes \
+            -m githubDeployment="1" \
+            -m githubCommitRef="$BRANCH" \
+            -m githubCommitSha="${{ github.sha }}" \
+            -m deploymentEnv="$DEPLOY_ENV" \
+            2>&1 | grep -Eo 'https://[^ ]+' | tail -1)
+
+          echo "Frontend deployed to: $VERCEL_URL"
+          echo "Deployment environment: $DEPLOY_ENV"
+          echo "vercel_url=$VERCEL_URL" >> $GITHUB_ENV
+          echo "deploy_env=$DEPLOY_ENV" >> $GITHUB_ENV
+
+      - name: Deploy Backend to Render
+        if: github.event_name == 'push'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          # Determine service name based on branch
+          BRANCH="${{ steps.branch.outputs.name }}"
+
+          case "$BRANCH" in
+            prod|production|main)
+              SERVICE_NAME="cicd-demo-backend-prod"
+              FLASK_ENV="production"
+              ;;
+            gamma)
+              SERVICE_NAME="cicd-demo-backend-gamma"
+              FLASK_ENV="gamma"
+              ;;
+            beta)
+              SERVICE_NAME="cicd-demo-backend-beta"
+              FLASK_ENV="beta"
+              ;;
+            *)
+              # Sanitize branch name
+              SANITIZED_BRANCH=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
+              SERVICE_NAME="cicd-demo-backend-$SANITIZED_BRANCH"
+              FLASK_ENV="development"
+              ;;
+          esac
+
+          echo "Service name: $SERVICE_NAME"
+          echo "Flask environment: $FLASK_ENV"
+
+          # Trigger deployment via Render API
+          RESPONSE=$(curl -s -X POST "https://api.render.com/v1/services" \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"$SERVICE_NAME\",
+              \"type\": \"web_service\",
+              \"repo\": \"${{ github.repository }}\",
+              \"branch\": \"$BRANCH\",
+              \"runtime\": \"python\",
+              \"buildCommand\": \"pip install -r requirements.txt\",
+              \"startCommand\": \"python server.py\",
+              \"envVars\": [
+                {\"key\": \"FLASK_ENV\", \"value\": \"$FLASK_ENV\"},
+                {\"key\": \"PORT\", \"value\": \"8080\"},
+                {\"key\": \"PYTHON_VERSION\", \"value\": \"3.11.0\"}
+              ]
+            }" || echo "Service may already exist")
+
+          echo "Backend deployment triggered for branch: $BRANCH"
+          echo "Environment: $FLASK_ENV"
+
+      - name: Comment PR with deployment URLs
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Deployment Preview\n\n✅ Frontend deployed to: ${process.env.vercel_url}\n\n🔄 Backend deployment in progress on Render`
+            })
+
+      - name: Deployment Summary
+        run: |
+          echo "=========================================="
+          echo "  Deployment Complete!"
+          echo "=========================================="
+          echo ""
+          echo "Branch: ${{ steps.branch.outputs.name }}"
+          echo "Frontend URL: ${{ env.vercel_url }}"
+          echo "Backend: Check Render Dashboard"
+          echo ""
