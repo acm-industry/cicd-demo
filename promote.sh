@@ -163,6 +163,16 @@ else
     exit 1
 fi
 
+# Trigger deployment via deploy.sh so frontend/backend pick up the new code
+echo ""
+print_info "Running deployment script for branch '$TARGET'..."
+if ./deploy.sh; then
+    print_success "Deploy script completed for $TARGET"
+else
+    print_error "deploy.sh failed. Please review the logs above."
+    exit 1
+fi
+
 echo ""
 print_success "=========================================="
 print_success "  Promotion Complete!"

@@ -155,6 +155,16 @@ else
     exit 1
 fi
 
+# Trigger full deployment to ensure environments reflect rollback
+echo ""
+print_info "Running deployment script for branch '$ENVIRONMENT'..."
+if ./deploy.sh; then
+    print_success "Deploy script completed for $ENVIRONMENT"
+else
+    print_error "deploy.sh failed. Please review the logs above."
+    exit 1
+fi
+
 echo ""
 print_success "=========================================="
 print_success "  Rollback Complete!"
