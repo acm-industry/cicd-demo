@@ -12,7 +12,7 @@ CORS(app)
 # API endpoint!
 @app.get("/api/your-mom")
 def home():
-    return Response("Error: file too big!", status=413)
+    return "Is a very nice lady :)"
 
 # Place endpoints in this space; they define functions/routes the app will save and look out for when requests come in
 # It'll parse and match accordingly; otherwise, it'll reject with a 404 error
