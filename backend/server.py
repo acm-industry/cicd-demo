@@ -1,4 +1,3 @@
-# Flask backend for the CI/CD demo (deployed on Render)
 import os
 
 from flask import Flask, jsonify, request, Response
